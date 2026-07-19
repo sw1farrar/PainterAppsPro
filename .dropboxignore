@@ -1,0 +1,10 @@
+node_modules
+.next
+dist
+build
+out
+.cache
+.turbo
+.vercel
+.env*.local
+*.log

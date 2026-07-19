@@ -1,0 +1,285 @@
+// PainterApps Pro — Supabase Postgres
+// DATABASE_URL: pooled (port 6543, ?pgbouncer=true)
+// DIRECT_URL: direct (port 5432) for migrations
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model BusinessSettings {
+  id                      String   @id @default(cuid())
+  companyName             String   @default("Your Painting Company")
+  logoPath                String?
+  address                 String?
+  city                    String?
+  state                   String?
+  zip                     String?
+  phone                   String?
+  email                   String?
+  website                 String?
+  defaultLaborRate        Float    @default(55) // blended $/man-hour
+  materialMarkupPct       Float    @default(25) // % markup on materials
+  taxRatePct              Float    @default(0) // sales tax %
+  wasteFactorPct          Float    @default(12) // paint waste/buffer %
+  defaultPrepPct          Float    @default(30) // prep hours as % of paint labor
+  defaultProfitTargetPct  Float    @default(35)
+  /** Standard spread rating (sq ft/gal) for new products + calc fallback */
+  defaultCoverageSqftPerGallon Float @default(375)
+  doorDeductionSqft       Float    @default(20)
+  windowDeductionSqft     Float    @default(15)
+  /** JSON map: catalog surfaceType → { productId, sheen } */
+  defaultProductsJson     String?
+  termsAndConditions      String   @default("Estimate valid for 30 days. 50% deposit required to schedule. Balance due upon completion. Prices subject to change if scope changes.")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model Customer {
+  id        String     @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  city      String?
+  state     String?
+  zip       String?
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  jobs      Job[]
+  estimates Estimate[]
+}
+
+model Job {
+  id          String     @id @default(cuid())
+  customerId  String
+  customer    Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  title       String
+  status      String     @default("draft") // draft | estimating | scheduled | in_progress | completed
+  address     String?
+  city        String?
+  state       String?
+  zip         String?
+  startDate   DateTime?
+  endDate     DateTime?
+  notes       String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  estimates   Estimate[]
+}
+
+model Estimate {
+  id                String             @id @default(cuid())
+  customerId        String?
+  customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  jobId             String?
+  job               Job?               @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  title             String
+  estimateNumber    String?
+  date              DateTime           @default(now())
+  validUntil        DateTime?
+  status            String             @default("draft") // draft | sent | accepted | rejected
+  version           Int                @default(1)
+  optionLabel       String             @default("Better") // Good | Better | Best (active option)
+  // Global overrides (nullable = use business defaults)
+  wasteFactorPct    Float?
+  materialMarkupPct Float?
+  laborRate         Float?
+  taxRatePct        Float?
+  prepPct           Float?
+  discountPct       Float?
+  discountAmount    Float?
+  profitTargetPct   Float?
+  notes             String?
+  internalNotes     String?
+  /** JSON array of project colors: [{ id, colorNumber, colorName, notes }] */
+  colorAssignmentsJson String?
+  subtotal          Float              @default(0)
+  taxAmount         Float              @default(0)
+  total             Float              @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  lineItems         EstimateLineItem[]
+  rooms             EstimateRoom[]
+  extras            EstimateExtra[]
+  photos            EstimatePhoto[]
+  options           EstimateOption[]
+}
+
+// Good / Better / Best option scopes (each holds its own line-item snapshot metadata)
+model EstimateOption {
+  id          String             @id @default(cuid())
+  estimateId  String
+  estimate    Estimate           @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  label       String // Good | Better | Best
+  description String?
+  isActive    Boolean            @default(false)
+  subtotal    Float              @default(0)
+  taxAmount   Float              @default(0)
+  total       Float              @default(0)
+  sortOrder   Int                @default(0)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  lineItems   EstimateLineItem[]
+  rooms       EstimateRoom[]
+}
+
+/// Room or exterior space — primary estimate row. Surfaces nest underneath.
+model EstimateRoom {
+  id             String             @id @default(cuid())
+  estimateId     String
+  estimate       Estimate           @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  optionId       String?
+  option         EstimateOption?    @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  name           String
+  kind           String             @default("interior") // interior | exterior
+  lengthFt       Float?
+  widthFt        Float?
+  heightFt       Float?
+  doorCount      Int                @default(0)
+  windowCount    Int                @default(0)
+  /** Blank wall openings — deduct paint only, no trim */
+  openingCount   Int                @default(0)
+  inputAreaSqft  Float? // exterior direct sq ft
+  inputLinearFt  Float? // exterior direct LF
+  condition      String             @default("medium") // easy | medium | hard
+  prepPct        Float? // null = estimate/business default
+  notes          String?
+  sortOrder      Int                @default(0)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  surfaces       EstimateLineItem[]
+}
+
+model EstimateLineItem {
+  id               String          @id @default(cuid())
+  estimateId       String
+  estimate         Estimate        @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  optionId         String?
+  option           EstimateOption? @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  roomId           String?
+  room             EstimateRoom?   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  description      String
+  surfaceType      String? // walls, ceilings, trim, doors, exterior, etc.
+  measurementType  String          @default("area") // area | unit
+  inputAreaSqft    Float?
+  quantity         Float?
+  unitLabel        String? // door, lf, each
+  dimensionsJson   String? // wall calculator / room metrics JSON
+  coats            Int             @default(2)
+  method           String? // Brush/Roll, Spray, etc.
+  conditionMultiplier Float?
+  paintProductId   String?
+  paintProduct     PaintProduct?   @relation(fields: [paintProductId], references: [id], onDelete: SetNull)
+  /** Selected sheen for this line (from the product's sheen list) */
+  sheen            String?
+  /** Project color id (references entry in estimate.colorAssignmentsJson). */
+  colorName        String?
+  /** @deprecated Unused; kept for legacy rows */
+  colorHex         String?
+  productionRateId String?
+  productionRate   ProductionRate? @relation(fields: [productionRateId], references: [id], onDelete: SetNull)
+  // Calculated (stored for history; recalculated live in UI)
+  gallons          Float?
+  laborHours       Float?
+  prepHours        Float?
+  materialCost     Float?
+  laborCost        Float?
+  lineTotal        Float?
+  // Manual overrides (null = use calculated)
+  gallonsOverride      Float?
+  laborHoursOverride   Float?
+  materialCostOverride Float?
+  laborCostOverride    Float?
+  lineTotalOverride    Float?
+  productionRateOverride Float? // sqft or units per man-hour override
+  notes            String?
+  sortOrder        Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+}
+
+model EstimateExtra {
+  id          String   @id @default(cuid())
+  estimateId  String
+  estimate    Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  category    String // sundries | travel | disposal | other
+  label       String
+  amountType  String   @default("fixed") // fixed | percent_of_subtotal
+  amount      Float    @default(0)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PaintProduct {
+  id                    String             @id @default(cuid())
+  name                  String
+  brand                 String             @default("Sherwin-Williams")
+  /** Spread rating — sq ft covered per gallon (customizable per product) */
+  coverageSqftPerGallon Float              @default(375)
+  pricePerGallon        Float
+  /** @deprecated Prefer sheens relation; kept as primary/display sheen */
+  sheen                 String? // Flat, Eggshell, Satin, Semi-Gloss, Gloss
+  category              String             @default("both") // interior | exterior | both
+  defaultSurfaceType    String?
+  /** Marketing / product features from manufacturer (AI-assisted) */
+  features              String             @default("")
+  /** Product can / packaging image URL */
+  canImageUrl           String?
+  notes                 String?
+  isActive              Boolean            @default(true)
+  sortOrder             Int                @default(0)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  lineItems             EstimateLineItem[]
+  sheens                PaintProductSheen[]
+}
+
+/** Available sheen options for a paint product (e.g. Flat, Eggshell, Satin). */
+model PaintProductSheen {
+  id             String       @id @default(cuid())
+  paintProductId String
+  paintProduct   PaintProduct @relation(fields: [paintProductId], references: [id], onDelete: Cascade)
+  name           String // Flat, Eggshell, Satin, Semi-Gloss, Gloss, etc.
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([paintProductId])
+  @@unique([paintProductId, name])
+}
+
+model ProductionRate {
+  id                String             @id @default(cuid())
+  surfaceType       String // Interior Walls, Ceilings, Trim, Doors, Exterior Siding, etc.
+  method            String             @default("Brush/Roll") // Brush/Roll, Spray, Spray+Backroll
+  measurementType   String             @default("area") // area | unit
+  ratePerManHour    Float // sqft/hr or units/hr (fallback / primary)
+  firstCoatRate     Float? // optional sqft/hr or units/hr for first coat
+  additionalCoatRate Float? // optional for coats after first
+  effective2CoatRate Float? // optional blended rate when coats == 2
+  defaultCoats      Int                @default(2)
+  notes             String?
+  isActive          Boolean            @default(true)
+  sortOrder         Int                @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  lineItems         EstimateLineItem[]
+}
+
+model EstimatePhoto {
+  id         String   @id @default(cuid())
+  estimateId String
+  estimate   Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  path       String // relative path under /public/uploads/
+  caption    String?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+}

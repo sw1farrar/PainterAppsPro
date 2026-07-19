@@ -138,3 +138,5 @@ $RECYCLE.BIN/
 .temp/
 .tmp/
 tmp/
+
+.vercel

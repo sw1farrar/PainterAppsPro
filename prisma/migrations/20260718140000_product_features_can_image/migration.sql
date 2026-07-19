@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "PaintProduct" ADD COLUMN IF NOT EXISTS "features" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "PaintProduct" ADD COLUMN IF NOT EXISTS "canImageUrl" TEXT;
