@@ -1,3 +1,11 @@
 .env
 .env.*
 !.env.example
+
+# Local product/estimate uploads — never ship in the serverless bundle
+public/uploads
+public/uploads/**
+
+# Build / deps (safety net for CLI deploys)
+.next
+node_modules
