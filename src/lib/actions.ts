@@ -10,7 +10,7 @@ import {
   conditionMultiplier,
 } from "@/lib/calculations";
 import { calculatePaintPackaging } from "@/lib/paint-packaging";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
 
 async function boot() {
@@ -806,6 +806,7 @@ export async function upsertPaintProduct(
     defaultSurfaceType?: string | null;
     features?: string | null;
     canImageUrl?: string | null;
+    dataSheetUrl?: string | null;
     notes?: string | null;
     isActive?: boolean;
   }
@@ -828,6 +829,7 @@ export async function upsertPaintProduct(
     defaultSurfaceType: data.defaultSurfaceType,
     features: data.features ?? "",
     canImageUrl: data.canImageUrl?.trim() ? data.canImageUrl.trim() : null,
+    dataSheetUrl: data.dataSheetUrl?.trim() ? data.dataSheetUrl.trim() : null,
     notes: data.notes,
     isActive: data.isActive,
   };
@@ -1029,6 +1031,433 @@ export async function uploadPaintProductCanImage(
   revalidatePath("/products");
   revalidatePath("/settings");
   return { path: relPath };
+}
+
+const MAX_CAN_IMAGE_BYTES = 12 * 1024 * 1024;
+
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+function isPrivateOrLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal")
+  ) {
+    return true;
+  }
+  // Block obvious private / link-local IPv4 literals
+  if (
+    /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function sniffImageExt(buf: Buffer): "jpg" | "png" | "webp" | "gif" | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return "jpg";
+  }
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47
+  ) {
+    return "png";
+  }
+  if (
+    buf.length >= 12 &&
+    buf.toString("ascii", 0, 4) === "RIFF" &&
+    buf.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "webp";
+  }
+  if (
+    buf.length >= 6 &&
+    buf.toString("ascii", 0, 3) === "GIF" &&
+    (buf[3] === 0x38 /* '8' */)
+  ) {
+    return "gif";
+  }
+  return null;
+}
+
+/** Normalize AI/search URLs: decode entities, unwrap imgurl= proxies, drop fragments. */
+function normalizeCanImageCandidateUrl(raw: string): string | null {
+  let url = raw.trim().replace(/&amp;/gi, "&").replace(/&quot;/gi, "");
+  if (!url) return null;
+
+  try {
+    const parsed = new URL(url);
+    // Google / Bing style wrappers: ...?imgurl=https%3A%2F%2F...
+    const wrapped =
+      parsed.searchParams.get("imgurl") ||
+      parsed.searchParams.get("mediaurl") ||
+      parsed.searchParams.get("url");
+    if (wrapped && /^https?:\/\//i.test(wrapped)) {
+      url = wrapped;
+    }
+  } catch {
+    /* keep original */
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    if (isPrivateOrLocalHostname(parsed.hostname)) return null;
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchImageOnce(
+  imageUrl: string,
+  headers: Record<string, string>
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    return await fetch(imageUrl, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function downloadCanImageBuffer(imageUrl: string): Promise<{
+  buffer: Buffer;
+  ext: "jpg" | "png" | "webp" | "gif";
+}> {
+  const normalized = normalizeCanImageCandidateUrl(imageUrl);
+  if (!normalized) throw new Error("Invalid image URL");
+
+  const parsed = new URL(normalized);
+  const origin = parsed.origin;
+  const headerAttempts: Record<string, string>[] = [
+    {
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      "User-Agent": BROWSER_UA,
+      Referer: `${origin}/`,
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+      Accept: "image/*,*/*;q=0.8",
+      "User-Agent": BROWSER_UA,
+      Referer: "https://www.google.com/",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+      Accept: "*/*",
+      "User-Agent": BROWSER_UA,
+    },
+  ];
+
+  let lastError: Error = new Error("Image download failed");
+  for (const headers of headerAttempts) {
+    try {
+      const res = await fetchImageOnce(normalized, headers);
+      if (!res.ok) {
+        lastError = new Error(
+          `Image download failed (${res.status}) from ${parsed.hostname}`
+        );
+        continue;
+      }
+
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      if (
+        contentType &&
+        !contentType.startsWith("image/") &&
+        !contentType.includes("octet-stream") &&
+        !contentType.includes("binary")
+      ) {
+        lastError = new Error(
+          `URL from ${parsed.hostname} returned ${contentType || "non-image"}`
+        );
+        continue;
+      }
+
+      const ab = await res.arrayBuffer();
+      if (ab.byteLength < 64) {
+        lastError = new Error("Image file too small");
+        continue;
+      }
+      if (ab.byteLength > MAX_CAN_IMAGE_BYTES) {
+        throw new Error("Image is too large (max 12 MB)");
+      }
+
+      const buffer = Buffer.from(ab);
+      const sniffed = sniffImageExt(buffer);
+      if (!sniffed) {
+        lastError = new Error(
+          `Downloaded file from ${parsed.hostname} is not a supported image`
+        );
+        continue;
+      }
+
+      return { buffer, ext: sniffed };
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("too large")) throw e;
+      lastError =
+        e instanceof Error
+          ? e.name === "AbortError"
+            ? new Error(`Image download timed out (${parsed.hostname})`)
+            : e
+          : new Error(String(e));
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Google Images find + import: search company + product name, download the
+ * best can photo, and store it under the product uploads folder.
+ */
+export async function importPaintProductCanImageViaAi(
+  productId: string,
+  input: { name: string; brand: string }
+) {
+  if (!productId?.trim()) throw new Error("Product id required");
+
+  const { findPaintProductCanImage } = await import("@/lib/google-images-can");
+  const found = await findPaintProductCanImage(input);
+  const rawCandidates = [found.canImageUrl, ...found.alternateImageUrls];
+  const candidates = Array.from(
+    new Set(
+      rawCandidates
+        .map(normalizeCanImageCandidateUrl)
+        .filter((u): u is string => Boolean(u))
+    )
+  );
+
+  if (!candidates.length) {
+    throw new Error(
+      `No downloadable can image URL for "${input.brand} ${input.name}". Try paste/upload.`
+    );
+  }
+
+  let lastError: Error | null = null;
+  for (const url of candidates) {
+    try {
+      const { buffer, ext } = await downloadCanImageBuffer(url);
+      // Store gif as png-compatible path name; browsers can still show gif.
+      const storeExt = ext === "gif" ? "gif" : ext;
+      const dir = path.join(
+        process.cwd(),
+        "public",
+        "uploads",
+        "products",
+        productId
+      );
+      await mkdir(dir, { recursive: true });
+      const safeName = `can-${Date.now()}.${storeExt}`;
+      await writeFile(path.join(dir, safeName), buffer);
+      const relPath = `/uploads/products/${productId}/${safeName}`;
+
+      await prisma.paintProduct.update({
+        where: { id: productId },
+        data: { canImageUrl: relPath },
+      });
+
+      revalidatePath("/products");
+      revalidatePath("/settings");
+      return {
+        path: relPath,
+        sourceUrl: url,
+        confidence: found.confidence,
+      };
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+
+  throw (
+    lastError ??
+    new Error("Could not download can image — try paste/upload instead")
+  );
+}
+
+const MAX_DATA_SHEET_BYTES = 30 * 1024 * 1024;
+
+function isPdfBuffer(buf: Buffer): boolean {
+  return buf.length >= 5 && buf.toString("ascii", 0, 5) === "%PDF-";
+}
+
+async function downloadPdfBuffer(pdfUrl: string): Promise<Buffer> {
+  const normalized = normalizeCanImageCandidateUrl(pdfUrl);
+  if (!normalized) throw new Error("Invalid PDF URL");
+
+  const parsed = new URL(normalized);
+  const headerAttempts: Record<string, string>[] = [
+    {
+      Accept: "application/pdf,*/*;q=0.8",
+      "User-Agent": BROWSER_UA,
+      Referer: `${parsed.origin}/`,
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+      Accept: "application/pdf,*/*",
+      "User-Agent": BROWSER_UA,
+      Referer: "https://www.google.com/",
+    },
+  ];
+
+  let lastError: Error = new Error("PDF download failed");
+  for (const headers of headerAttempts) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const res = await fetch(normalized, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers,
+      });
+      if (!res.ok) {
+        lastError = new Error(
+          `PDF download failed (${res.status}) from ${parsed.hostname}`
+        );
+        continue;
+      }
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      const ab = await res.arrayBuffer();
+      if (ab.byteLength < 64) {
+        lastError = new Error("PDF file too small");
+        continue;
+      }
+      if (ab.byteLength > MAX_DATA_SHEET_BYTES) {
+        throw new Error("PDF is too large (max 30 MB)");
+      }
+      const buffer = Buffer.from(ab);
+      if (!isPdfBuffer(buffer)) {
+        lastError = new Error(
+          contentType.includes("pdf")
+            ? `Downloaded file from ${parsed.hostname} is not a valid PDF`
+            : `URL from ${parsed.hostname} did not return a PDF`
+        );
+        continue;
+      }
+      return buffer;
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("too large")) throw e;
+      lastError =
+        e instanceof Error
+          ? e.name === "AbortError"
+            ? new Error(`PDF download timed out (${parsed.hostname})`)
+            : e
+          : new Error(String(e));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Google Search find + import: locate a product data sheet PDF, download it,
+ * store under product uploads, and save the path on the product.
+ */
+export async function importPaintProductDataSheet(
+  productId: string,
+  input: { name: string; brand: string }
+) {
+  if (!productId?.trim()) throw new Error("Product id required");
+
+  const { findPaintProductDataSheet } = await import("@/lib/google-datasheet");
+  const found = await findPaintProductDataSheet(input);
+  const candidates = Array.from(
+    new Set(
+      [found.dataSheetUrl, ...found.alternateUrls]
+        .map(normalizeCanImageCandidateUrl)
+        .filter((u): u is string => Boolean(u))
+    )
+  );
+
+  if (!candidates.length) {
+    throw new Error(
+      `No downloadable data sheet for "${input.brand} ${input.name}".`
+    );
+  }
+
+  let lastError: Error | null = null;
+  for (const url of candidates) {
+    try {
+      const buffer = await downloadPdfBuffer(url);
+      const dir = path.join(
+        process.cwd(),
+        "public",
+        "uploads",
+        "products",
+        productId
+      );
+      await mkdir(dir, { recursive: true });
+      const safeName = `datasheet-${Date.now()}.pdf`;
+      await writeFile(path.join(dir, safeName), buffer);
+      const relPath = `/uploads/products/${productId}/${safeName}`;
+
+      await prisma.paintProduct.update({
+        where: { id: productId },
+        data: { dataSheetUrl: relPath },
+      });
+
+      revalidatePath("/products");
+      revalidatePath("/settings");
+      return {
+        path: relPath,
+        sourceUrl: url,
+        title: found.title,
+        confidence: found.confidence,
+      };
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+
+  throw (
+    lastError ??
+    new Error("Could not download product data sheet PDF")
+  );
+}
+
+/** Clear the saved product data sheet PDF (DB + local upload file when present). */
+export async function clearPaintProductDataSheet(productId: string) {
+  if (!productId?.trim()) throw new Error("Product id required");
+
+  const product = await prisma.paintProduct.findUnique({
+    where: { id: productId },
+    select: { dataSheetUrl: true },
+  });
+  if (!product) throw new Error("Product not found");
+
+  const rel = product.dataSheetUrl?.trim() || "";
+  await prisma.paintProduct.update({
+    where: { id: productId },
+    data: { dataSheetUrl: null },
+  });
+
+  // Delete local upload if it lives under this product's uploads folder
+  if (rel.startsWith(`/uploads/products/${productId}/`)) {
+    const filePath = path.join(process.cwd(), "public", rel.replace(/^\//, ""));
+    try {
+      await unlink(filePath);
+    } catch {
+      // File may already be gone — DB clear is what matters
+    }
+  }
+
+  revalidatePath("/products");
+  revalidatePath("/settings");
+  return { ok: true as const };
 }
 
 // ─── Export / Import ────────────────────────────────────────

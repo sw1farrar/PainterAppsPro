@@ -134,6 +134,10 @@ async function xaiResponses(input: {
   allowedDomains?: string[];
   enableImageSearch?: boolean;
   enableImageUnderstanding?: boolean;
+  /** Override model (defaults to XAI_MODEL / grok-4.5). */
+  model?: string;
+  /** Cap completion size when the API supports it. */
+  maxOutputTokens?: number;
 }): Promise<{ text: string }> {
   const tool: Record<string, unknown> = {
     type: "web_search",
@@ -146,17 +150,25 @@ async function xaiResponses(input: {
     };
   }
 
+  const body: Record<string, unknown> = {
+    model:
+      input.model?.trim() ||
+      process.env.XAI_MODEL?.trim() ||
+      "grok-4.5",
+    input: [{ role: "user", content: input.prompt }],
+    tools: [tool],
+  };
+  if (input.maxOutputTokens && input.maxOutputTokens > 0) {
+    body.max_output_tokens = input.maxOutputTokens;
+  }
+
   const res = await fetch("https://api.x.ai/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${input.apiKey}`,
     },
-    body: JSON.stringify({
-      model: process.env.XAI_MODEL?.trim() || "grok-4.5",
-      input: [{ role: "user", content: input.prompt }],
-      tools: [tool],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {

@@ -11,13 +11,26 @@ import {
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
-import { Plus, Pencil, Search, X } from "lucide-react";
-import { upsertPaintProduct } from "@/lib/actions";
+import {
+  Plus,
+  Pencil,
+  Search,
+  X,
+  ImagePlus,
+  Loader2,
+  FileText,
+} from "lucide-react";
+import {
+  upsertPaintProduct,
+  importPaintProductCanImageViaAi,
+  importPaintProductDataSheet,
+} from "@/lib/actions";
 import { Button } from "@/components/ui/button";
 import {
   ProductEditModal,
   type EditableProduct,
 } from "@/components/products/product-edit-modal";
+import { DataSheetPreviewModal } from "@/components/products/data-sheet-preview-modal";
 import { ManufacturerCatalogImportButton } from "@/components/products/manufacturer-catalog-import";
 import {
   PAINT_PRODUCT_CATEGORIES,
@@ -106,6 +119,10 @@ export function ProductsClient({
   const [pending, start] = useTransition();
   const [products, setProducts] = useState(initialProducts);
   const [editing, setEditing] = useState<Product | null>(null);
+  const [sheetPreview, setSheetPreview] = useState<{
+    url: string;
+    title: string;
+  } | null>(null);
   const [search, setSearch] = useState("");
   const [featureSearch, setFeatureSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -118,6 +135,16 @@ export function ProductsClient({
   );
   const stickyRef = useRef<HTMLDivElement>(null);
   const [stickyHeight, setStickyHeight] = useState(100);
+  const bulkAbortRef = useRef(false);
+  const [bulkFill, setBulkFill] = useState<{
+    kind: "cans" | "sheets";
+    running: boolean;
+    current: number;
+    total: number;
+    productName: string;
+    ok: number;
+    failed: number;
+  } | null>(null);
 
   useEffect(() => {
     setProducts(initialProducts);
@@ -248,6 +275,129 @@ export function ProductsClient({
     setEditing({ ...p, sheens: [...p.sheens] });
   }
 
+  const missingCanImages = useMemo(
+    () =>
+      products.filter((p) => {
+        if (p.canImageUrl?.trim()) return false;
+        const name = p.name.trim();
+        if (!name || name.toLowerCase() === "new product") return false;
+        return true;
+      }),
+    [products]
+  );
+
+  const missingDataSheets = useMemo(
+    () =>
+      products.filter((p) => {
+        if (p.dataSheetUrl?.trim()) return false;
+        const name = p.name.trim();
+        if (!name || name.toLowerCase() === "new product") return false;
+        return true;
+      }),
+    [products]
+  );
+
+  function stopBulkFill() {
+    bulkAbortRef.current = true;
+  }
+
+  async function runBulkFill(kind: "cans" | "sheets") {
+    const queue = kind === "cans" ? missingCanImages : missingDataSheets;
+    const label = kind === "cans" ? "can images" : "data sheets";
+    if (!queue.length) {
+      toast.message(`All products already have ${label}`);
+      return;
+    }
+    if (bulkFill?.running) return;
+
+    bulkAbortRef.current = false;
+    setBulkFill({
+      kind,
+      running: true,
+      current: 0,
+      total: queue.length,
+      productName: queue[0]?.name ?? "",
+      ok: 0,
+      failed: 0,
+    });
+
+    let ok = 0;
+    let failed = 0;
+
+    for (let i = 0; i < queue.length; i++) {
+      if (bulkAbortRef.current) break;
+      const product = queue[i];
+      setBulkFill({
+        kind,
+        running: true,
+        current: i + 1,
+        total: queue.length,
+        productName: product.name,
+        ok,
+        failed,
+      });
+
+      try {
+        if (kind === "cans") {
+          const { path } = await importPaintProductCanImageViaAi(product.id, {
+            name: product.name,
+            brand: product.brand,
+          });
+          const nextUrl = `${path}?v=${Date.now()}`;
+          ok += 1;
+          setProducts((prev) =>
+            prev.map((p) =>
+              p.id === product.id ? { ...p, canImageUrl: nextUrl } : p
+            )
+          );
+          setEditing((prev) =>
+            prev?.id === product.id ? { ...prev, canImageUrl: nextUrl } : prev
+          );
+        } else {
+          const { path } = await importPaintProductDataSheet(product.id, {
+            name: product.name,
+            brand: product.brand,
+          });
+          ok += 1;
+          setProducts((prev) =>
+            prev.map((p) =>
+              p.id === product.id ? { ...p, dataSheetUrl: path } : p
+            )
+          );
+          setEditing((prev) =>
+            prev?.id === product.id ? { ...prev, dataSheetUrl: path } : prev
+          );
+        }
+      } catch {
+        failed += 1;
+      }
+
+      setBulkFill({
+        kind,
+        running: true,
+        current: i + 1,
+        total: queue.length,
+        productName: product.name,
+        ok,
+        failed,
+      });
+
+      if (i < queue.length - 1 && !bulkAbortRef.current) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+
+    const stopped = bulkAbortRef.current;
+    setBulkFill(null);
+    if (stopped) {
+      toast.message(`Stopped — ${ok} imported, ${failed} failed`);
+    } else if (failed === 0) {
+      toast.success(`Imported ${ok} ${label}`);
+    } else {
+      toast.message(`Done — ${ok} imported, ${failed} failed`);
+    }
+  }
+
   function addProduct() {
     start(async () => {
       try {
@@ -261,6 +411,7 @@ export function ProductsClient({
           defaultSurfaceType: null,
           features: "",
           canImageUrl: null,
+          dataSheetUrl: null,
           notes: null,
           isActive: true,
         });
@@ -276,6 +427,7 @@ export function ProductsClient({
           defaultSurfaceType: saved.defaultSurfaceType ?? null,
           features: saved.features ?? "",
           canImageUrl: saved.canImageUrl ?? null,
+          dataSheetUrl: saved.dataSheetUrl ?? null,
           notes: saved.notes,
           isActive: saved.isActive,
           updatedAt: saved.updatedAt,
@@ -367,6 +519,7 @@ export function ProductsClient({
                       category: p.category ?? "both",
                       features: p.features ?? "",
                       canImageUrl: p.canImageUrl ?? null,
+                      dataSheetUrl: p.dataSheetUrl ?? null,
                     }));
                   return [...prev, ...next];
                 });
@@ -374,8 +527,64 @@ export function ProductsClient({
             />
             <Button
               size="sm"
+              variant="outline"
+              className="h-7 gap-1 px-2.5 text-[12px]"
+              disabled={
+                pending ||
+                !!bulkFill?.running ||
+                missingCanImages.length === 0
+              }
+              onClick={() => void runBulkFill("cans")}
+              title={
+                missingCanImages.length
+                  ? `Find Google Images can photos for ${missingCanImages.length} products`
+                  : "All products have can images"
+              }
+            >
+              {bulkFill?.running && bulkFill.kind === "cans" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ImagePlus className="size-3.5" />
+              )}
+              Fill cans
+              {missingCanImages.length > 0 ? (
+                <span className="tabular-nums text-muted-foreground">
+                  ({missingCanImages.length})
+                </span>
+              ) : null}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 px-2.5 text-[12px]"
+              disabled={
+                pending ||
+                !!bulkFill?.running ||
+                missingDataSheets.length === 0
+              }
+              onClick={() => void runBulkFill("sheets")}
+              title={
+                missingDataSheets.length
+                  ? `Find product data sheet PDFs for ${missingDataSheets.length} products`
+                  : "All products have data sheets"
+              }
+            >
+              {bulkFill?.running && bulkFill.kind === "sheets" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <FileText className="size-3.5" />
+              )}
+              Fill sheets
+              {missingDataSheets.length > 0 ? (
+                <span className="tabular-nums text-muted-foreground">
+                  ({missingDataSheets.length})
+                </span>
+              ) : null}
+            </Button>
+            <Button
+              size="sm"
               className="h-7 px-2.5 text-[12px]"
-              disabled={pending}
+              disabled={pending || !!bulkFill?.running}
               onClick={addProduct}
             >
               <Plus className="size-3.5" />
@@ -383,6 +592,50 @@ export function ProductsClient({
             </Button>
           </div>
         </header>
+
+        {bulkFill?.running ? (
+          <div className="border-t border-sky-100 bg-sky-50/90 px-4 py-2">
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <div className="min-w-0 text-[12px] text-slate-700">
+                <span className="font-medium">
+                  {bulkFill.kind === "cans" ? "Can images" : "Data sheets"}
+                </span>
+                <span className="text-muted-foreground"> · </span>
+                <span className="font-medium tabular-nums">
+                  {bulkFill.current}/{bulkFill.total}
+                </span>
+                <span className="text-muted-foreground"> · </span>
+                <span className="truncate">{bulkFill.productName}</span>
+                {(bulkFill.ok > 0 || bulkFill.failed > 0) && (
+                  <span className="ml-1.5 text-[11px] text-muted-foreground">
+                    ({bulkFill.ok} ok
+                    {bulkFill.failed > 0 ? `, ${bulkFill.failed} failed` : ""})
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={stopBulkFill}
+                className="shrink-0 text-[11px] font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
+              >
+                Stop
+              </button>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-sky-100">
+              <div
+                className="h-full rounded-full bg-sky-500 transition-[width] duration-300 ease-out"
+                style={{
+                  width: `${Math.max(
+                    4,
+                    Math.round(
+                      (bulkFill.current / Math.max(bulkFill.total, 1)) * 100
+                    )
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="space-y-1 px-4 pb-2">
           {typeOptions.length > 0 ? (
@@ -492,8 +745,26 @@ export function ProductsClient({
                         </div>
                       ) : null}
                       <div className="min-w-0">
-                        <div className="font-medium text-slate-900">
-                          {p.name}
+                        <div className="flex items-center gap-1.5">
+                          <div className="font-medium text-slate-900">
+                            {p.name}
+                          </div>
+                          {p.dataSheetUrl ? (
+                            <button
+                              type="button"
+                              title="Preview product data sheet"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSheetPreview({
+                                  url: p.dataSheetUrl!,
+                                  title: p.name,
+                                });
+                              }}
+                              className="inline-flex text-sky-600 hover:text-sky-800"
+                            >
+                              <FileText className="size-3.5" />
+                            </button>
+                          ) : null}
                         </div>
                         <div className="text-[11px] text-muted-foreground">
                           {p.brand}
@@ -549,6 +820,15 @@ export function ProductsClient({
         </p>
       </div>
 
+      <DataSheetPreviewModal
+        open={!!sheetPreview}
+        url={sheetPreview?.url ?? null}
+        title={sheetPreview?.title}
+        onOpenChange={(o) => {
+          if (!o) setSheetPreview(null);
+        }}
+      />
+
       <ProductEditModal
         product={editing}
         open={!!editing}
@@ -556,6 +836,29 @@ export function ProductsClient({
           if (!o) setEditing(null);
         }}
         defaultSpreadRating={defaultSpreadRating}
+        onPreviewDataSheet={(url, title) => {
+          setSheetPreview({ url, title });
+        }}
+        onCanImageImported={(productId, canImageUrl) => {
+          setProducts((prev) =>
+            prev.map((p) =>
+              p.id === productId ? { ...p, canImageUrl } : p
+            )
+          );
+          setEditing((prev) =>
+            prev?.id === productId ? { ...prev, canImageUrl } : prev
+          );
+        }}
+        onDataSheetImported={(productId, dataSheetUrl) => {
+          setProducts((prev) =>
+            prev.map((p) =>
+              p.id === productId ? { ...p, dataSheetUrl } : p
+            )
+          );
+          setEditing((prev) =>
+            prev?.id === productId ? { ...prev, dataSheetUrl } : prev
+          );
+        }}
         onSaved={(saved) => {
           setProducts((prev) =>
             prev.map((p) =>

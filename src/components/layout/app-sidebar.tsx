@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { useSettingsModal } from "@/components/settings/settings-modal-provider";
 
 const NAV = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/estimates/new", label: "New Estimate", icon: PlusCircle },
   { href: "/estimates", label: "Estimates", icon: ClipboardList },
   { href: "/products", label: "Product Library", icon: PaintBucket },
@@ -41,13 +41,20 @@ export function AppSidebar() {
     for (const item of NAV) {
       void router.prefetch(item.href);
     }
+    void router.prefetch("/");
   }, [router]);
 
   if (pathname.includes("/proposal")) return null;
 
   return (
     <aside className="flex w-[200px] shrink-0 flex-col bg-sidebar text-sidebar-foreground print:hidden">
-      <div className="flex items-center gap-2.5 border-b border-sidebar-border px-3 py-3">
+      <Link
+        href="/"
+        prefetch
+        title="Back to website"
+        aria-label="Back to PainterApps Pro website"
+        className="flex items-center gap-2.5 border-b border-sidebar-border px-3 py-3 transition-colors hover:bg-sidebar-accent/40"
+      >
         <Logo variant="icon" size="sm" />
         <div className="leading-tight">
           <div className="text-[13px] font-bold tracking-tight text-white">
@@ -55,12 +62,12 @@ export function AppSidebar() {
           </div>
           <div className="text-[10px] text-slate-400">Local Estimating</div>
         </div>
-      </div>
+      </Link>
       <nav className="flex flex-1 flex-col gap-0.5 p-2">
         {NAV.map((item) => {
           const active =
-            item.href === "/"
-              ? pathname === "/"
+            item.href === "/dashboard"
+              ? pathname === "/dashboard"
               : item.href === "/estimates"
                 ? pathname === "/estimates" ||
                   (pathname.startsWith("/estimates/") &&

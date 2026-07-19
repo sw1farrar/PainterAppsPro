@@ -37,6 +37,7 @@ async function ProductsBody() {
         defaultSurfaceType: p.defaultSurfaceType ?? null,
         features: p.features ?? "",
         canImageUrl: p.canImageUrl ?? null,
+        dataSheetUrl: p.dataSheetUrl ?? null,
         notes: p.notes,
         isActive: p.isActive,
         updatedAt: p.updatedAt,

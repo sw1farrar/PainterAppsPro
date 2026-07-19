@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono, Oswald } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AppSidebar } from "@/components/layout/app-sidebar";
+import { AppShell } from "@/components/layout/app-shell";
 import { SettingsModalProvider } from "@/components/settings/settings-modal-provider";
 import "./globals.css";
 
@@ -16,6 +16,12 @@ const plexMono = IBM_Plex_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
   weight: ["400", "500"],
+});
+
+const oswald = Oswald({
+  variable: "--font-display",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -34,15 +40,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable} h-full`}
+      className={`${plexSans.variable} ${plexMono.variable} ${oswald.variable} h-full`}
     >
       <body className="flex h-full min-h-screen overflow-hidden antialiased">
         <TooltipProvider delay={200}>
           <SettingsModalProvider>
-            <AppSidebar />
-            <main className="flex min-w-0 flex-1 flex-col overflow-auto p-3">
-              {children}
-            </main>
+            <AppShell>{children}</AppShell>
             <Toaster position="bottom-right" richColors closeButton />
           </SettingsModalProvider>
         </TooltipProvider>

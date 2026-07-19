@@ -9,12 +9,18 @@ import {
   Loader2,
   Upload,
   ClipboardPaste,
+  ImagePlus,
+  FileText,
+  ExternalLink,
 } from "lucide-react";
 import {
   upsertPaintProduct,
   deletePaintProduct,
   lookupPaintProductAttributes,
   uploadPaintProductCanImage,
+  importPaintProductCanImageViaAi,
+  importPaintProductDataSheet,
+  clearPaintProductDataSheet,
 } from "@/lib/actions";
 import { scaleImageToCanSlot } from "@/lib/can-image-scale";
 import { PAINT_PRODUCT_CATEGORIES, paintProductCategoryLabel } from "@/lib/paint-product-category";
@@ -60,6 +66,7 @@ export type EditableProduct = {
   defaultSurfaceType: string | null;
   features?: string | null;
   canImageUrl?: string | null;
+  dataSheetUrl?: string | null;
   notes: string | null;
   isActive: boolean;
   updatedAt?: string | Date;
@@ -80,6 +87,9 @@ export function ProductEditModal({
   defaultSpreadRating = 375,
   onSaved,
   onDeleted,
+  onCanImageImported,
+  onDataSheetImported,
+  onPreviewDataSheet,
   contentClassName,
   overlayClassName,
 }: {
@@ -89,19 +99,28 @@ export function ProductEditModal({
   defaultSpreadRating?: number;
   onSaved: (product: EditableProduct) => void;
   onDeleted: (id: string) => void;
+  onCanImageImported?: (productId: string, canImageUrl: string) => void;
+  onDataSheetImported?: (
+    productId: string,
+    dataSheetUrl: string | null
+  ) => void;
+  onPreviewDataSheet?: (url: string, title: string) => void;
   contentClassName?: string;
   overlayClassName?: string;
 }) {
   const [pending, start] = useTransition();
   const [aiPending, startAi] = useTransition();
   const [uploadPending, startUpload] = useTransition();
+  const [canAiPending, startCanAi] = useTransition();
+  const [sheetPending, startSheet] = useTransition();
   const [draft, setDraft] = useState<EditableProduct | null>(null);
   const [sheenDraft, setSheenDraft] = useState("");
   const [priceDraft, setPriceDraft] = useState("50.00");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pasteZoneRef = useRef<HTMLDivElement>(null);
   const [pasteFocused, setPasteFocused] = useState(false);
-  const busy = pending || aiPending || uploadPending;
+  const busy =
+    pending || aiPending || uploadPending || canAiPending || sheetPending;
 
   useEffect(() => {
     if (!open || !product) {
@@ -113,6 +132,7 @@ export function ProductEditModal({
       sheens: [...product.sheens],
       features: product.features ?? "",
       canImageUrl: product.canImageUrl ?? null,
+      dataSheetUrl: product.dataSheetUrl ?? null,
     });
     setPriceDraft(moneyText(product.pricePerGallon));
     setSheenDraft("");
@@ -126,6 +146,7 @@ export function ProductEditModal({
           sheens: [...product.sheens],
           features: product.features ?? "",
           canImageUrl: product.canImageUrl ?? null,
+          dataSheetUrl: product.dataSheetUrl ?? null,
         }
       : null);
 
@@ -212,6 +233,82 @@ export function ProductEditModal({
     });
   }
 
+  function runAiCanImageImport() {
+    if (!view) return;
+    const productId = view.id;
+    const name = view.name;
+    const brand = view.brand;
+    startCanAi(async () => {
+      try {
+        const { path, confidence } = await importPaintProductCanImageViaAi(
+          productId,
+          { name, brand }
+        );
+        const canImageUrl = `${path}?v=${Date.now()}`;
+        setDraft((prev) =>
+          prev ? { ...prev, canImageUrl } : prev
+        );
+        onCanImageImported?.(productId, canImageUrl);
+        toast.success(
+          confidence === "low"
+            ? "Can image imported — double-check it’s the right product"
+            : "Can image imported"
+        );
+      } catch (e) {
+        toast.error(
+          e instanceof Error ? e.message : "Google Images can import failed"
+        );
+      }
+    });
+  }
+
+  function runDataSheetImport() {
+    if (!view) return;
+    const productId = view.id;
+    const name = view.name;
+    const brand = view.brand;
+    startSheet(async () => {
+      try {
+        const { path, confidence } = await importPaintProductDataSheet(
+          productId,
+          { name, brand }
+        );
+        setDraft((prev) =>
+          prev ? { ...prev, dataSheetUrl: path } : prev
+        );
+        onDataSheetImported?.(productId, path);
+        toast.success(
+          confidence === "low"
+            ? "Data sheet imported — double-check it’s the right PDF"
+            : "Data sheet imported"
+        );
+      } catch (e) {
+        toast.error(
+          e instanceof Error ? e.message : "Data sheet import failed"
+        );
+      }
+    });
+  }
+
+  function removeDataSheet() {
+    if (!view?.dataSheetUrl) return;
+    const productId = view.id;
+    startSheet(async () => {
+      try {
+        await clearPaintProductDataSheet(productId);
+        setDraft((prev) =>
+          prev ? { ...prev, dataSheetUrl: null } : prev
+        );
+        onDataSheetImported?.(productId, null);
+        toast.success("Data sheet removed");
+      } catch (e) {
+        toast.error(
+          e instanceof Error ? e.message : "Could not remove data sheet"
+        );
+      }
+    });
+  }
+
   function onCanImageFileChange(fileList: FileList | null) {
     const file = fileList?.[0];
     if (!file) return;
@@ -277,6 +374,7 @@ export function ProductEditModal({
       pricePerGallon: parseFloat(fixed),
       features: view.features ?? "",
       canImageUrl: view.canImageUrl?.trim().split("?")[0] || null,
+      dataSheetUrl: view.dataSheetUrl?.trim() || null,
     };
 
     start(async () => {
@@ -292,6 +390,7 @@ export function ProductEditModal({
           defaultSurfaceType: next.defaultSurfaceType,
           features: next.features ?? "",
           canImageUrl: next.canImageUrl,
+          dataSheetUrl: next.dataSheetUrl,
           notes: next.notes,
           isActive: next.isActive,
         });
@@ -308,6 +407,7 @@ export function ProductEditModal({
           defaultSurfaceType: saved.defaultSurfaceType ?? null,
           features: saved.features ?? "",
           canImageUrl: saved.canImageUrl ?? null,
+          dataSheetUrl: saved.dataSheetUrl ?? null,
           notes: saved.notes,
           isActive: saved.isActive,
           updatedAt: saved.updatedAt,
@@ -421,26 +521,51 @@ export function ProductEditModal({
                     className="pointer-events-none h-full w-full object-contain"
                   />
                 ) : (
-                  <div className="flex flex-col items-center gap-1 px-2 text-center text-muted-foreground">
-                    <ClipboardPaste className="size-5 opacity-60" />
-                    <span className="text-[10px] font-medium leading-tight text-slate-600">
-                      Paste image here
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      runAiCanImageImport();
+                    }}
+                    title="Find can image on Google Images"
+                    className={cn(
+                      "flex h-full w-full flex-col items-center justify-center gap-1.5 px-2 text-center transition-colors",
+                      "hover:bg-sky-50/80 disabled:pointer-events-none disabled:opacity-60"
+                    )}
+                  >
+                    {canAiPending ? (
+                      <Loader2 className="size-6 animate-spin text-sky-600" />
+                    ) : (
+                      <ImagePlus className="size-6 text-sky-600" />
+                    )}
+                    <span className="text-[11px] font-semibold leading-tight text-sky-800">
+                      {canAiPending ? "Searching Google…" : "Find can image"}
                     </span>
-                    <span className="text-[9px] leading-tight">
-                      Ctrl+V / ⌘V
+                    <span className="text-[9px] leading-tight text-muted-foreground">
+                      or paste / upload below
                     </span>
+                  </button>
+                )}
+                {(uploadPending || canAiPending) && view.canImageUrl && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+                    <Loader2 className="size-5 animate-spin text-sky-600" />
                   </div>
                 )}
-                {uploadPending && (
+                {uploadPending && !view.canImageUrl && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/70">
                     <Loader2 className="size-5 animate-spin text-sky-600" />
                   </div>
                 )}
               </div>
               <p className="text-center text-[9px] leading-tight text-muted-foreground">
-                {pasteFocused
-                  ? "Ready — press Ctrl+V"
-                  : "Click preview, then paste"}
+                {view.canImageUrl
+                  ? pasteFocused
+                    ? "Ready — press Ctrl+V to replace"
+                    : "Click preview, then paste to replace"
+                  : pasteFocused
+                    ? "Ready — press Ctrl+V"
+                    : "Google find, or paste / upload"}
               </p>
               <input
                 ref={fileInputRef}
@@ -580,6 +705,70 @@ export function ProductEditModal({
               }
               placeholder="Product features from the manufacturer…"
             />
+          </div>
+
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/50 p-2.5">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Product data sheet
+              </div>
+              {view.dataSheetUrl ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onPreviewDataSheet) {
+                      onPreviewDataSheet(
+                        view.dataSheetUrl!,
+                        view.name || "Product data sheet"
+                      );
+                      return;
+                    }
+                    window.open(view.dataSheetUrl!, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  <ExternalLink className="size-3" />
+                  Preview PDF
+                </button>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 text-[12px]"
+                disabled={busy}
+                onClick={runDataSheetImport}
+                title="Find and save product data sheet PDF via Google"
+              >
+                {sheetPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <FileText className="size-3.5" />
+                )}
+                {view.dataSheetUrl ? "Re-find PDF" : "Find data sheet"}
+              </Button>
+              {view.dataSheetUrl ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 gap-1 text-[12px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  disabled={busy}
+                  onClick={removeDataSheet}
+                  title="Remove saved data sheet PDF"
+                >
+                  <Trash2 className="size-3.5" />
+                  Remove PDF
+                </Button>
+              ) : (
+                <span className="text-[11px] text-muted-foreground">
+                  Searches Google for brand + product PDF
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/50 p-2.5">

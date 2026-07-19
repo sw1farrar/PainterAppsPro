@@ -102,6 +102,7 @@ type Product = {
   defaultSurfaceType?: string | null;
   features?: string | null;
   canImageUrl?: string | null;
+  dataSheetUrl?: string | null;
   notes: string | null;
   isActive: boolean;
   sheens?: Array<{ id?: string; name: string; sortOrder?: number }>;

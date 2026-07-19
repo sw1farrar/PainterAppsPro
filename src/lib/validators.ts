@@ -70,6 +70,10 @@ export const paintProductSchema = z.object({
     .union([z.literal(""), z.string().url()])
     .optional()
     .nullable(),
+  dataSheetUrl: z
+    .union([z.literal(""), z.string().min(1)])
+    .optional()
+    .nullable(),
   notes: z.string().optional().nullable(),
   isActive: z.boolean().optional(),
 });

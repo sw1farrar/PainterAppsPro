@@ -233,6 +233,8 @@ model PaintProduct {
   features              String             @default("")
   /** Product can / packaging image URL */
   canImageUrl           String?
+  /** Local path or URL to manufacturer product data sheet PDF */
+  dataSheetUrl          String?
   notes                 String?
   isActive              Boolean            @default(true)
   sortOrder             Int                @default(0)

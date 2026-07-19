@@ -38,6 +38,7 @@ type ProgressEvent =
         defaultSurfaceType: string | null;
         features: string;
         canImageUrl: string | null;
+        dataSheetUrl: string | null;
         notes: string | null;
         isActive: boolean;
         updatedAt: Date;
@@ -243,6 +244,7 @@ export async function POST(req: Request) {
                 defaultSurfaceType: saved.defaultSurfaceType ?? null,
                 features: saved.features ?? "",
                 canImageUrl: saved.canImageUrl ?? null,
+                dataSheetUrl: saved.dataSheetUrl ?? null,
                 notes: saved.notes,
                 isActive: saved.isActive,
                 updatedAt: saved.updatedAt,

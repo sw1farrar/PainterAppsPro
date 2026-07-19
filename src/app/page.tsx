@@ -1,209 +1,72 @@
-import { Suspense } from "react";
 import Link from "next/link";
-import { Plus, Users, ClipboardList, Briefcase } from "lucide-react";
-import { getDashboardData } from "@/lib/actions";
-import { formatCurrency } from "@/lib/calculations";
-import { statusColor, cn } from "@/lib/utils";
-import { buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { PageLoading } from "@/components/layout/page-loading";
-import { format } from "date-fns";
+import { Logo } from "@/components/logo";
 
-export const dynamic = "force-dynamic";
+export const metadata = {
+  title: "PainterApps Pro",
+  description:
+    "Local-first paint estimating for professional contractors.",
+};
 
-export default function DashboardPage() {
+/**
+ * Clean single-viewport landing.
+ * P mark is the hero; wordmark sits under it on a shared center axis.
+ * Sole control: Enter (top-right) → /dashboard
+ */
+export default function LandingPage() {
   return (
-    <Suspense fallback={<PageLoading label="Loading dashboard" />}>
-      <DashboardBody />
-    </Suspense>
-  );
-}
+    <div className="landing relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#0b1526] text-white">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 landing-atmosphere"
+      />
 
-async function DashboardBody() {
-  const data = await getDashboardData();
+      {/* Soft vignette — keeps focus on the lockup */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_65%_55%_at_50%_42%,transparent_0%,rgba(8,14,24,0.55)_100%)]"
+      />
 
-  return (
-    <div className="flex flex-col">
-      <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2.5">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-[11px] text-muted-foreground">
-            Pipeline overview — {format(new Date(), "EEEE, MMM d, yyyy")}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Link
-            href="/customers"
-            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-8")}
-          >
-            <Users className="size-3.5" />
-            New Customer
-          </Link>
-          <Link
-            href="/estimates/new"
-            className={cn(buttonVariants({ size: "sm" }), "h-8")}
-          >
-            <Plus className="size-3.5" />
-            New Estimate
-          </Link>
-        </div>
+      <header className="relative z-10 flex shrink-0 justify-end px-6 pt-5 pb-2 sm:px-10">
+        <Link
+          href="/dashboard"
+          className="landing-fade-in inline-flex h-10 items-center rounded-md border border-white/15 px-4 text-[13px] font-medium tracking-wide text-white/85 transition-colors duration-200 hover:border-white/35 hover:bg-white/[0.04] hover:text-white"
+        >
+          Enter
+        </Link>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 p-4 lg:grid-cols-4">
-        <Kpi
-          label="Estimates this month"
-          value={String(data.estimatesThisMonth)}
-          icon={<ClipboardList className="size-4 text-slate-500" />}
-        />
-        <Kpi
-          label="Pipeline value"
-          value={formatCurrency(data.pipelineValue)}
-          sub="Draft + Sent"
-          icon={<span className="text-sm font-semibold text-slate-500">$</span>}
-        />
-        <Kpi
-          label="Accepted this month"
-          value={String(data.acceptedThisMonth)}
-          icon={<Briefcase className="size-4 text-emerald-600" />}
-        />
-        <Kpi
-          label="Customers"
-          value={String(data.customerCount)}
-          icon={<Users className="size-4 text-slate-500" />}
-        />
-      </div>
-
-      <div className="grid gap-3 px-4 pb-4 lg:grid-cols-2">
-        <section className="panel overflow-hidden">
-          <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-2">
-            <h2 className="section-label">Recent Estimates</h2>
-            <Link
-              href="/estimates"
-              className="text-[11px] text-primary hover:underline"
-            >
-              View all
-            </Link>
+      <main className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-10">
+        {/* Optical center: slightly above true middle */}
+        <div className="landing-lockup -mt-[3vh] flex w-full max-w-lg flex-col items-center">
+          {/*
+            P mark is the hero. Stripe on the left makes the mark optically
+            heavy on that side — nudge right so it sits on the same axis as
+            the wordmark below.
+          */}
+          <div className="landing-mark translate-x-[3px]">
+            <Logo
+              variant="icon"
+              size="xl"
+              className="[&_svg]:h-[clamp(5.5rem,22vmin,8.5rem)] [&_svg]:w-[clamp(5.5rem,22vmin,8.5rem)] [&_svg]:shadow-[0_28px_90px_-28px_rgba(0,0,0,0.7)]"
+            />
           </div>
-          <table className="dense-table w-full">
-            <thead>
-              <tr>
-                <th className="text-left">Estimate</th>
-                <th className="text-left">Customer</th>
-                <th>Status</th>
-                <th className="text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.recentEstimates.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="py-6 text-center text-muted-foreground">
-                    No estimates yet. Create your first one.
-                  </td>
-                </tr>
-              )}
-              {data.recentEstimates.map((e) => (
-                <tr key={e.id}>
-                  <td>
-                    <Link
-                      href={`/estimates/${e.id}`}
-                      className="font-medium text-primary hover:underline"
-                    >
-                      {e.estimateNumber ?? e.title}
-                    </Link>
-                    <div className="truncate text-[11px] text-muted-foreground max-w-[180px]">
-                      {e.title}
-                    </div>
-                  </td>
-                  <td className="text-muted-foreground">
-                    {e.customer?.name ?? "—"}
-                  </td>
-                  <td>
-                    <StatusDot status={e.status} />
-                  </td>
-                  <td className="num font-medium">{formatCurrency(e.total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
 
-        <section className="panel overflow-hidden">
-          <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-2">
-            <h2 className="section-label">Active Jobs</h2>
-            <Link href="/jobs" className="text-[11px] text-primary hover:underline">
-              View all
-            </Link>
-          </div>
-          <table className="dense-table w-full">
-            <thead>
-              <tr>
-                <th className="text-left">Job</th>
-                <th className="text-left">Customer</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.activeJobs.length === 0 && (
-                <tr>
-                  <td colSpan={3} className="py-6 text-center text-muted-foreground">
-                    No active jobs. Accept an estimate to schedule work.
-                  </td>
-                </tr>
-              )}
-              {data.activeJobs.map((j) => (
-                <tr key={j.id}>
-                  <td className="font-medium">{j.title}</td>
-                  <td className="text-muted-foreground">{j.customer.name}</td>
-                  <td>
-                    <StatusDot status={j.status} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      </div>
-    </div>
-  );
-}
+          {/* Wordmark — shared vertical center axis with the mark */}
+          <h1 className="landing-wordmark mt-[clamp(1.35rem,3.8vh,2.15rem)] text-center font-[family-name:var(--font-display)] text-[clamp(2rem,6.5vw,3.25rem)] font-semibold leading-none tracking-[-0.03em]">
+            <span className="text-white">PainterApps</span>
+            <span className="ml-[0.28em] font-medium text-[#8eb6e8]">Pro</span>
+          </h1>
 
-function Kpi({
-  label,
-  value,
-  sub,
-  icon,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="panel flex items-start gap-3 px-3 py-3">
-      <div className="mt-0.5 flex size-8 items-center justify-center rounded-sm bg-muted">
-        {icon}
-      </div>
-      <div>
-        <div className="section-label">{label}</div>
-        <div className="mt-0.5 text-xl font-semibold tracking-tight num">
-          {value}
+          <div
+            aria-hidden
+            className="landing-rule mt-[clamp(1.15rem,3vh,1.6rem)] h-px w-10 bg-white/25"
+          />
+
+          <p className="landing-tagline mt-[clamp(0.95rem,2.4vh,1.3rem)] max-w-[24ch] text-center text-[clamp(0.875rem,2vw,1.05rem)] leading-relaxed text-slate-400">
+            Local-first estimating for painting contractors.
+          </p>
         </div>
-        {sub && (
-          <div className="text-[10px] text-muted-foreground">{sub}</div>
-        )}
-      </div>
+      </main>
     </div>
-  );
-}
-
-function StatusDot({ status }: { status: string }) {
-  return (
-    <Badge
-      variant="outline"
-      className="h-5 gap-1.5 rounded-sm px-1.5 text-[10px] font-medium capitalize"
-    >
-      <span className={`size-1.5 rounded-full ${statusColor(status)}`} />
-      {status.replace("_", " ")}
-    </Badge>
   );
 }
