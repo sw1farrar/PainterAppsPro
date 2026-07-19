@@ -6,7 +6,6 @@ import { formatCurrency } from "@/lib/calculations";
 import { statusColor, ESTIMATE_STATUSES, cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { PageLoading } from "@/components/layout/page-loading";
 import { ImportEstimateButton } from "@/components/estimates/import-estimate-button";
 import { DeleteEstimateButton } from "@/components/estimates/delete-estimate-button";
 import { format } from "date-fns";
@@ -19,27 +18,12 @@ export default function EstimatesPage({
   searchParams: Promise<{ status?: string }>;
 }) {
   return (
-    <Suspense fallback={<PageLoading label="Loading estimates" />}>
-      <EstimatesBody searchParams={searchParams} />
-    </Suspense>
-  );
-}
-
-async function EstimatesBody({
-  searchParams,
-}: {
-  searchParams: Promise<{ status?: string }>;
-}) {
-  const { status } = await searchParams;
-  const estimates = await listEstimates(status);
-
-  return (
     <div className="flex flex-col">
       <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2.5">
         <div>
           <h1 className="text-base font-semibold">Estimates</h1>
           <p className="text-[11px] text-muted-foreground">
-            {estimates.length} estimate{estimates.length === 1 ? "" : "s"}
+            Draft, send, and track proposals
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -54,6 +38,23 @@ async function EstimatesBody({
         </div>
       </header>
 
+      <Suspense fallback={<EstimatesTableSkeleton />}>
+        <EstimatesBody searchParams={searchParams} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function EstimatesBody({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string }>;
+}) {
+  const { status } = await searchParams;
+  const estimates = await listEstimates(status);
+
+  return (
+    <>
       <div className="flex gap-1 border-b border-border bg-card px-4 py-2">
         <FilterChip href="/estimates" active={!status} label="All" />
         {ESTIMATE_STATUSES.map((s) => (
@@ -86,7 +87,10 @@ async function EstimatesBody({
             <tbody>
               {estimates.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                  <td
+                    colSpan={8}
+                    className="py-8 text-center text-muted-foreground"
+                  >
                     No estimates. Create one or load a template in the builder.
                   </td>
                 </tr>
@@ -110,7 +114,9 @@ async function EstimatesBody({
                       variant="outline"
                       className="h-5 gap-1.5 rounded-sm px-1.5 text-[10px] capitalize"
                     >
-                      <span className={`size-1.5 rounded-full ${statusColor(e.status)}`} />
+                      <span
+                        className={`size-1.5 rounded-full ${statusColor(e.status)}`}
+                      />
                       {e.status}
                     </Badge>
                   </td>
@@ -118,7 +124,9 @@ async function EstimatesBody({
                     {format(e.updatedAt, "MMM d, yyyy")}
                   </td>
                   <td className="num">{e._count.rooms}</td>
-                  <td className="num font-semibold">{formatCurrency(e.total)}</td>
+                  <td className="num font-semibold">
+                    {formatCurrency(e.total)}
+                  </td>
                   <td className="text-right">
                     <DeleteEstimateButton
                       estimateId={e.id}
@@ -132,7 +140,41 @@ async function EstimatesBody({
           </table>
         </div>
       </div>
-    </div>
+    </>
+  );
+}
+
+function EstimatesTableSkeleton() {
+  return (
+    <>
+      <div className="flex gap-1 border-b border-border bg-card px-4 py-2">
+        {["All", "Draft", "Sent", "Accepted", "Declined"].map((label) => (
+          <span
+            key={label}
+            className="rounded-sm bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground/50"
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+      <div className="p-4">
+        <div className="panel overflow-hidden">
+          <div className="space-y-0">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-4 border-b border-border px-3 py-3 last:border-b-0"
+              >
+                <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+                <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+                <div className="h-3 w-28 animate-pulse rounded bg-muted" />
+                <div className="ml-auto h-3 w-16 animate-pulse rounded bg-muted" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 

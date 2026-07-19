@@ -239,12 +239,18 @@ export async function updateJob(
 // ─── Estimates ──────────────────────────────────────────────
 export async function listEstimates(status?: string) {
   await boot();
+  // Lean list projection — list UI only needs these fields.
   return prisma.estimate.findMany({
     where: status ? { status } : undefined,
-    include: {
-      customer: true,
-      job: true,
-      _count: { select: { lineItems: true, rooms: true } },
+    select: {
+      id: true,
+      estimateNumber: true,
+      title: true,
+      status: true,
+      total: true,
+      updatedAt: true,
+      customer: { select: { name: true } },
+      _count: { select: { rooms: true } },
     },
     orderBy: { updatedAt: "desc" },
   });

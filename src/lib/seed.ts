@@ -34,12 +34,17 @@ export async function ensureSeeded() {
 }
 
 async function runEnsureSeeded() {
-  const [settings, productCount, rateCount, customerCount] = await Promise.all([
+  const [settings, productCount, rateCount] = await Promise.all([
     prisma.businessSettings.findFirst({ select: { id: true } }),
     prisma.paintProduct.count(),
     prisma.productionRate.count(),
-    prisma.customer.count(),
   ]);
+
+  // Hot path: catalogs already exist. Skip sync/migration churn that used to
+  // fire dozens of remote DB round-trips on every cold start / first nav.
+  if (settings && productCount > 0 && rateCount > 0) {
+    return;
+  }
 
   if (!settings) {
     await prisma.businessSettings.create({
@@ -63,12 +68,6 @@ async function runEnsureSeeded() {
         windowDeductionSqft: 15,
       },
     });
-  } else {
-    // Old seed used Denver 8.31% — sales tax defaults to 0
-    await prisma.businessSettings.updateMany({
-      where: { taxRatePct: 8.31 },
-      data: { taxRatePct: 0 },
-    });
   }
 
   if (productCount === 0) {
@@ -85,7 +84,6 @@ async function runEnsureSeeded() {
         },
       });
     }
-  } else {
     await ensureProductSheens();
     await syncExteriorStuccoProduct();
   }
@@ -94,12 +92,11 @@ async function runEnsureSeeded() {
     await prisma.productionRate.createMany({
       data: SEED_RATES,
     });
-  } else {
-    // Upsert interior targets + ensure missing surface types exist
     await syncInteriorProductionRates();
     await ensureExteriorStuccoRate();
   }
 
+  const customerCount = await prisma.customer.count();
   if (customerCount === 0) {
     await seedDemoEstimate();
   }
